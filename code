@@ -1,54 +1,48 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.9;
 
-import "@openzeppelin/contracts@4.8.3/token/ERC20/ERC20.sol";
-import "@openzeppelin/contracts@4.8.3/token/ERC20/extensions/ERC20Burnable.sol";
-import "@openzeppelin/contracts@4.8.3/token/ERC20/extensions/ERC20Snapshot.sol";
-import "@openzeppelin/contracts@4.8.3/access/Ownable.sol";
-import "@openzeppelin/contracts@4.8.3/token/ERC20/extensions/draft-ERC20Permit.sol";
-import "@openzeppelin/contracts@4.8.3/token/ERC20/extensions/ERC20Votes.sol";
+import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
+import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Snapshot.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/security/Pausable.sol";
+import "@openzeppelin/contracts/token/ERC20/extensions/draft-ERC20Permit.sol";
+import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Votes.sol";
 
-contract PAINCoin is ERC20, ERC20Burnable, ERC20Snapshot, Ownable, ERC20Permit, ERC20Votes {
-    address public foundationReserve;
-    address public treasury;
-    address public teamAndMarketing;
+contract PainCoin is ERC20, ERC20Burnable, ERC20Snapshot, Ownable, Pausable, ERC20Permit, ERC20Votes {
+    uint256 public constant _totalSupply = 1 * 10**12;
+    address public reserveWallet;
+    uint256 public reserveLock = _totalSupply * 10 / 100;
+    uint256 public maxWalletSize = _totalSupply * 1 / 100;
 
-    constructor(address _foundationReserve, address _treasury, address _teamAndMarketing) ERC20("PAINCoin", "PAIN") ERC20Permit("PAINCoin") {
-        foundationReserve = _foundationReserve;
-        treasury = _treasury;
-        teamAndMarketing = _teamAndMarketing;
+    mapping(address => uint256) private _lastClaim;
 
-        uint256 totalSupply = 1000000000 * 10 ** decimals();
-
-        _mint(foundationReserve, totalSupply * 10 / 100);
-        _mint(treasury, totalSupply * 10 / 100);
-        _mint(teamAndMarketing, totalSupply * 5 / 100);
-        _mint(msg.sender, totalSupply * 75 / 100);
+    constructor(address _reserveWallet) ERC20("PainCoin", "PAIN") ERC20Permit("PainCoin") {
+        reserveWallet = _reserveWallet;
+        _mint(msg.sender, _totalSupply - reserveLock);
+        _mint(reserveWallet, reserveLock);
     }
 
     function snapshot() public onlyOwner {
         _snapshot();
     }
 
-    function mint(address to, uint256 amount) public onlyOwner {
-        _mint(to, amount);
+    function pause() public onlyOwner {
+        _pause();
     }
 
-    function _transfer(address sender, address recipient, uint256 amount) internal virtual override {
-        super._transfer(sender, recipient, amount);
-
-        if (sender != treasury && recipient != treasury) {
-            uint256 burnAmount = amount / 10000; // 0.01%
-            _burn(treasury, burnAmount);
-        }
+    function unpause() public onlyOwner {
+        _unpause();
     }
-
-    // The following functions are overrides required by Solidity.
 
     function _beforeTokenTransfer(address from, address to, uint256 amount)
         internal
+        whenNotPaused
         override(ERC20, ERC20Snapshot)
     {
+        if (to != reserveWallet) {
+            require(balanceOf(to) + amount <= maxWalletSize, "Exceeds max wallet size");
+        }
         super._beforeTokenTransfer(from, to, amount);
     }
 
@@ -72,4 +66,20 @@ contract PAINCoin is ERC20, ERC20Burnable, ERC20Snapshot, Ownable, ERC20Permit, 
     {
         super._burn(account, amount);
     }
+
+    function _transfer(address sender, address recipient, uint256 amount) internal override {
+        uint256 burnAmount = (amount * 10) / 10000;
+        uint256 transferAmount = amount - burnAmount;
+        super._transfer(sender, recipient, transferAmount);
+        if (burnAmount > 0) {
+            super._burn(sender, burnAmount);
+        }
+    } // Closing brace for _transfer() was missing.
+
+    function claimRewards() public {
+        require(block.timestamp - _lastClaim[msg.sender] > 2 hours, "Must wait 2 hours between claims");
+        uint256 reward = balanceOf(msg.sender) / 100000; // 0.001%
+        _transfer(reserveWallet, msg.sender, reward);
+        _lastClaim[msg.sender] = block.timestamp;
+    } // Closing brace for claimRewards() was missing
 }
